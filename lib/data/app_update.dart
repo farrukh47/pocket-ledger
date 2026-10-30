@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -33,16 +32,24 @@ class UpdateInfo {
 class AppUpdate {
   static const _install = MethodChannel('pocket_ledger/install');
 
+  static Future<({String version, int build})> current() async {
+    final raw = await _install.invokeMethod<dynamic>('getVersion');
+    final map = Map<String, dynamic>.from(raw as Map);
+    final version = (map['version'] as String?)?.trim() ?? '0.0.0';
+    final build = (map['build'] as num?)?.toInt() ?? 0;
+    return (version: version, build: build);
+  }
+
   static Future<String> currentVersionLabel() async {
-    final info = await PackageInfo.fromPlatform();
-    return '${info.version}+${info.buildNumber}';
+    final info = await current();
+    return '${info.version}+${info.build}';
   }
 
   /// Returns update details when a newer GitHub release exists; otherwise null.
   static Future<UpdateInfo?> check() async {
-    final info = await PackageInfo.fromPlatform();
+    final info = await current();
     final localVersion = info.version;
-    final localBuild = int.tryParse(info.buildNumber) ?? 0;
+    final localBuild = info.build;
 
     final uri = Uri.parse(
       'https://api.github.com/repos/$githubOwner/$githubRepo/releases/latest',

@@ -3,6 +3,7 @@
 .pub-cache/
 .pub/
 build/
+android/.kotlin/
 .flutter-plugins*
 .flutter-plugins-dependencies
 android/local.properties

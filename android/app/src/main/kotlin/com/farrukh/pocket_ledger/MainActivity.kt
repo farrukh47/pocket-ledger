@@ -64,38 +64,59 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "pocket_ledger/install")
             .setMethodCallHandler { call, result ->
-                if (call.method != "installApk") {
-                    result.notImplemented()
-                    return@setMethodCallHandler
-                }
-                val path = call.argument<String>("path")
-                if (path.isNullOrBlank()) {
-                    result.error("invalid", "Missing APK path.", null)
-                    return@setMethodCallHandler
-                }
-                try {
-                    val file = File(path)
-                    if (!file.exists() || file.length() < 1024L) {
-                        result.error("invalid", "APK file is missing or incomplete.", null)
-                        return@setMethodCallHandler
-                    }
-                    val uri: Uri = FileProvider.getUriForFile(
-                        this,
-                        "${applicationContext.packageName}.fileprovider",
-                        file,
-                    )
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, "application/vnd.android.package-archive")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                when (call.method) {
+                    "getVersion" -> {
+                        try {
+                            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+                            val version = packageInfo.versionName ?: "0.0.0"
+                            val build = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                packageInfo.longVersionCode
+                            } else {
+                                @Suppress("DEPRECATION")
+                                packageInfo.versionCode.toLong()
+                            }
+                            result.success(
+                                mapOf(
+                                    "version" to version,
+                                    "build" to build.toInt(),
+                                ),
+                            )
+                        } catch (e: Exception) {
+                            result.error("version", e.message ?: "Could not read app version.", null)
                         }
                     }
-                    startActivity(intent)
-                    result.success(true)
-                } catch (e: Exception) {
-                    result.error("install", e.message ?: "Could not open the installer.", null)
+                    "installApk" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("invalid", "Missing APK path.", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val file = File(path)
+                            if (!file.exists() || file.length() < 1024L) {
+                                result.error("invalid", "APK file is missing or incomplete.", null)
+                                return@setMethodCallHandler
+                            }
+                            val uri: Uri = FileProvider.getUriForFile(
+                                this,
+                                "${applicationContext.packageName}.fileprovider",
+                                file,
+                            )
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "application/vnd.android.package-archive")
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                }
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("install", e.message ?: "Could not open the installer.", null)
+                        }
+                    }
+                    else -> result.notImplemented()
                 }
             }
     }
