@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -182,7 +183,8 @@ class _HomeState extends State<Home> {
       if (go != true || !mounted) return;
 
       final cached = await AppUpdate.cachedApk(update);
-      File apk;
+      if (!mounted) return;
+      late final File apk;
       if (cached != null) {
         apk = cached;
         _message('Using downloaded ${update.label}…');
