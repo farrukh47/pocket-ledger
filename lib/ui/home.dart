@@ -159,12 +159,13 @@ class _HomeState extends State<Home> {
       final go = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text('Update ${update.label}'),
+          title: Text('Update to ${update.label}'),
           content: Text(
-            'A newer build is available.\n\n'
+            'A newer version is available for this app.\n\n'
             'Current: $current\n'
-            'Latest: ${update.label}\n\n'
-            'Download and install now?',
+            'Latest: ${update.label}\n'
+            'Size: ${update.sizeLabel}\n\n'
+            'This updates Pocket Ledger in place. Your data stays on the phone.',
           ),
           actions: [
             TextButton(
@@ -173,48 +174,84 @@ class _HomeState extends State<Home> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Update'),
+              child: const Text('Update now'),
             ),
           ],
         ),
       );
       if (go != true || !mounted) return;
 
+      final progress = ValueNotifier<(int received, int total)>((0, update.sizeBytes));
       showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (context) => const PopScope(
+        builder: (context) => PopScope(
           canPop: false,
-          child: AlertDialog(
-            title: Text('Downloading update'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                LinearProgressIndicator(),
-                SizedBox(height: 14),
-                Text('Please keep the app open…'),
-              ],
-            ),
+          child: ValueListenableBuilder<(int, int)>(
+            valueListenable: progress,
+            builder: (context, value, _) {
+              final received = value.$1;
+              final total = value.$2 > 0 ? value.$2 : update.sizeBytes;
+              final ratio = total > 0 ? (received / total).clamp(0.0, 1.0) : null;
+              final percent = total > 0
+                  ? ((received / total) * 100).clamp(0, 100).toStringAsFixed(0)
+                  : '…';
+              return AlertDialog(
+                title: const Text('Updating Pocket Ledger'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    LinearProgressIndicator(value: ratio),
+                    const SizedBox(height: 14),
+                    Text(
+                      total > 0
+                          ? '${formatBytes(received)} / ${formatBytes(total)}  ($percent%)'
+                          : '${formatBytes(received)} downloaded',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Keep the app open. Android will ask you to confirm the update.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: _muted),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       );
 
       try {
-        final apk = await AppUpdate.download(update);
-        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        final apk = await AppUpdate.download(
+          update,
+          onProgress: (received, total) {
+            progress.value = (received, total);
+          },
+        );
+        progress.value = (
+          await apk.length(),
+          update.sizeBytes > 0 ? update.sizeBytes : await apk.length(),
+        );
         if (!mounted) return;
-        _message('Opening installer for ${update.label}…');
-        await AppUpdate.install(apk);
+        _message('Applying update ${update.label}…');
+        await AppUpdate.installUpdate(apk);
+        if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        _message('Confirm the system update prompt to finish.');
       } catch (_) {
         if (mounted) Navigator.of(context, rootNavigator: true).pop();
         rethrow;
+      } finally {
+        progress.dispose();
       }
     } on FormatException catch (e) {
       _message(e.message);
     } on PlatformException catch (e) {
-      _message(e.message ?? 'Could not install the update.');
+      _message(e.message ?? 'Could not apply the update.');
     } catch (_) {
-      _message('Update check failed. Check your internet connection.');
+      _message('Update failed. Check your internet connection and try again.');
     } finally {
       if (mounted) setState(() => _working = false);
     }

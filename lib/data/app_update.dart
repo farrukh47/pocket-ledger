@@ -16,6 +16,7 @@ class UpdateInfo {
   final String apkUrl;
   final String releaseUrl;
   final String notes;
+  final int sizeBytes;
 
   const UpdateInfo({
     required this.tag,
@@ -24,9 +25,21 @@ class UpdateInfo {
     required this.apkUrl,
     required this.releaseUrl,
     required this.notes,
+    required this.sizeBytes,
   });
 
   String get label => '$version+$build';
+
+  String get sizeLabel => formatBytes(sizeBytes);
+}
+
+String formatBytes(int bytes) {
+  if (bytes <= 0) return 'unknown size';
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 class AppUpdate {
@@ -86,6 +99,7 @@ class AppUpdate {
 
     String? apkUrl;
     String? assetName;
+    var sizeBytes = 0;
     for (final asset in assets) {
       if (asset is! Map<String, dynamic>) continue;
       final name = asset['name'] as String? ?? '';
@@ -93,6 +107,7 @@ class AppUpdate {
       if (url != null && name.toLowerCase().endsWith('.apk')) {
         apkUrl = url;
         assetName = name;
+        sizeBytes = (asset['size'] as num?)?.toInt() ?? 0;
         if (name.toLowerCase().contains('pocket-ledger')) break;
       }
     }
@@ -113,15 +128,16 @@ class AppUpdate {
       releaseUrl: data['html_url'] as String? ??
           'https://github.com/$githubOwner/$githubRepo/releases/tag/$tag',
       notes: (data['body'] as String? ?? '').trim(),
+      sizeBytes: sizeBytes,
     );
   }
 
   static Future<File> download(
     UpdateInfo update, {
-    void Function(double progress)? onProgress,
+    void Function(int received, int total)? onProgress,
   }) async {
     final dir = await getTemporaryDirectory();
-    final file = File(p.join(dir.path, 'pocket-ledger-${update.label}.apk'));
+    final file = File(p.join(dir.path, 'pocket-ledger-update.apk'));
     if (await file.exists()) await file.delete();
 
     final client = HttpClient();
@@ -132,17 +148,19 @@ class AppUpdate {
       if (response.statusCode != 200) {
         throw FormatException('Download failed (${response.statusCode}).');
       }
-      final total = response.contentLength;
+      final total = response.contentLength > 0
+          ? response.contentLength
+          : update.sizeBytes;
       var received = 0;
       final sink = file.openWrite();
       await for (final chunk in response) {
         received += chunk.length;
         sink.add(chunk);
-        if (total > 0 && onProgress != null) onProgress(received / total);
+        onProgress?.call(received, total > 0 ? total : received);
       }
       await sink.close();
       if (await file.length() < 1024) {
-        throw const FormatException('Downloaded file looks incomplete.');
+        throw const FormatException('Downloaded update looks incomplete.');
       }
       return file;
     } finally {
@@ -150,8 +168,9 @@ class AppUpdate {
     }
   }
 
-  static Future<void> install(File apk) async {
-    await _install.invokeMethod<void>('installApk', {'path': apk.path});
+  /// Installs over the existing app (same package + signing key).
+  static Future<void> installUpdate(File apk) async {
+    await _install.invokeMethod<void>('installUpdate', {'path': apk.path});
   }
 
   static ({String version, int build}) _parseRemote(String tag, String assetName) {

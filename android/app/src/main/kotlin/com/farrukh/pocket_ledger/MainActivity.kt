@@ -1,10 +1,10 @@
 package com.farrukh.pocket_ledger
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.PackageInstaller
 import android.os.Build
-import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -85,40 +85,81 @@ class MainActivity : FlutterActivity() {
                             result.error("version", e.message ?: "Could not read app version.", null)
                         }
                     }
-                    "installApk" -> {
+                    "installUpdate" -> {
                         val path = call.argument<String>("path")
                         if (path.isNullOrBlank()) {
-                            result.error("invalid", "Missing APK path.", null)
+                            result.error("invalid", "Missing update path.", null)
                             return@setMethodCallHandler
                         }
-                        try {
-                            val file = File(path)
-                            if (!file.exists() || file.length() < 1024L) {
-                                result.error("invalid", "APK file is missing or incomplete.", null)
-                                return@setMethodCallHandler
-                            }
-                            val uri: Uri = FileProvider.getUriForFile(
-                                this,
-                                "${applicationContext.packageName}.fileprovider",
-                                file,
-                            )
-                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, "application/vnd.android.package-archive")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        io.execute {
+                            try {
+                                installUpdateSession(File(path))
+                                runOnUiThread {
+                                    if (!isDestroyed) result.success(true)
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread {
+                                    if (!isDestroyed) {
+                                        result.error(
+                                            "install",
+                                            e.message ?: "Could not start the in-app update.",
+                                            null,
+                                        )
+                                    }
                                 }
                             }
-                            startActivity(intent)
-                            result.success(true)
-                        } catch (e: Exception) {
-                            result.error("install", e.message ?: "Could not open the installer.", null)
                         }
                     }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun installUpdateSession(file: File) {
+        if (!file.exists() || file.length() < 1024L) {
+            error("Update file is missing or incomplete.")
+        }
+
+        val installer = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        params.setAppPackageName(packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+        }
+
+        val sessionId = installer.createSession(params)
+        val session = installer.openSession(sessionId)
+        try {
+            file.inputStream().use { input ->
+                session.openWrite("package", 0, file.length()).use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        out.write(buffer, 0, count)
+                    }
+                    session.fsync(out)
+                }
+            }
+
+            val callback = Intent(this, UpdateInstallReceiver::class.java).apply {
+                action = UpdateInstallReceiver.ACTION
+                setPackage(packageName)
+            }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_MUTABLE
+                } else {
+                    0
+                }
+            val pendingIntent = PendingIntent.getBroadcast(this, sessionId, callback, flags)
+            session.commit(pendingIntent.intentSender)
+        } catch (e: Exception) {
+            session.abandon()
+            throw e
+        } finally {
+            session.close()
+        }
     }
 
     @Deprecated("Uses the FlutterActivity activity result bridge")
