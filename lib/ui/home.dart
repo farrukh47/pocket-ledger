@@ -239,7 +239,7 @@ class _HomeState extends State<Home> {
         _message('Applying update ${update.label}…');
         await AppUpdate.installUpdate(apk);
         if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        _message('Confirm the system update prompt to finish.');
+        _message('Tap Update on the system screen to finish installing over this app.');
       } catch (_) {
         if (mounted) Navigator.of(context, rootNavigator: true).pop();
         rethrow;

@@ -4,7 +4,11 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -91,21 +95,30 @@ class MainActivity : FlutterActivity() {
                             result.error("invalid", "Missing update path.", null)
                             return@setMethodCallHandler
                         }
-                        io.execute {
+                        val file = File(path)
+                        // Start installer on the UI thread so MIUI shows the update screen.
+                        runOnUiThread {
                             try {
-                                installUpdateSession(File(path))
-                                runOnUiThread {
-                                    if (!isDestroyed) result.success(true)
+                                if (!file.exists() || file.length() < 1024L) {
+                                    result.error("invalid", "Update file is missing or incomplete.", null)
+                                    return@runOnUiThread
                                 }
-                            } catch (e: Exception) {
-                                runOnUiThread {
-                                    if (!isDestroyed) {
-                                        result.error(
-                                            "install",
-                                            e.message ?: "Could not start the in-app update.",
-                                            null,
-                                        )
-                                    }
+                                // Prefer the classic package installer UI (reliable on MIUI).
+                                // Same package name + signing key => Android updates this app in place.
+                                openPackageInstallerUi(file)
+                                result.success(true)
+                            } catch (primary: Exception) {
+                                try {
+                                    installWithSession(file)
+                                    result.success(true)
+                                } catch (secondary: Exception) {
+                                    result.error(
+                                        "install",
+                                        secondary.message
+                                            ?: primary.message
+                                            ?: "Could not open the update installer.",
+                                        null,
+                                    )
                                 }
                             }
                         }
@@ -115,11 +128,49 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    private fun installUpdateSession(file: File) {
-        if (!file.exists() || file.length() < 1024L) {
-            error("Update file is missing or incomplete.")
+    /** Opens the system installer so the user can confirm updating this app. */
+    private fun openPackageInstallerUi(file: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            error("Allow “Install unknown apps” for Pocket Ledger, then tap Check for updates again.")
         }
 
+        val uri: Uri = FileProvider.getUriForFile(
+            this,
+            "${applicationContext.packageName}.fileprovider",
+            file,
+        )
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            putExtra(Intent.EXTRA_RETURN_RESULT, false)
+        }
+
+        val resolvers = packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        for (info in resolvers) {
+            grantUriPermission(
+                info.activityInfo.packageName,
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        if (resolvers.isEmpty()) {
+            error("No package installer is available on this device.")
+        }
+        startActivity(intent)
+    }
+
+    /** Fallback: PackageInstaller session (some devices prefer this path). */
+    private fun installWithSession(file: File) {
         val installer = packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(packageName)
@@ -128,8 +179,7 @@ class MainActivity : FlutterActivity() {
         }
 
         val sessionId = installer.createSession(params)
-        val session = installer.openSession(sessionId)
-        try {
+        installer.openSession(sessionId).use { session ->
             file.inputStream().use { input ->
                 session.openWrite("package", 0, file.length()).use { out ->
                     val buffer = ByteArray(64 * 1024)
@@ -154,11 +204,6 @@ class MainActivity : FlutterActivity() {
                 }
             val pendingIntent = PendingIntent.getBroadcast(this, sessionId, callback, flags)
             session.commit(pendingIntent.intentSender)
-        } catch (e: Exception) {
-            session.abandon()
-            throw e
-        } finally {
-            session.close()
         }
     }
 
