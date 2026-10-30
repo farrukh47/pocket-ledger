@@ -1,0 +1,20 @@
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins*
+.flutter-plugins-dependencies
+android/local.properties
+android/.gradle/
+android/**/gradle-wrapper.jar
+*.iml
+.idea/
+.vscode/
+# Keep the shared app signing keystore tracked so CI and devices
+# can install updates over the same signature.
+# Do not add other *.jks / *.keystore files.
+key.properties
+*.keystore
+!android/app/shared-keystore.jks
+

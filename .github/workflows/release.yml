@@ -1,0 +1,116 @@
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type (ignored for the very first release)'
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(grep '^version:' pubspec.yaml | head -n1 | awk '{print $2}')
+          name=${current%%+*}
+          code=${current##*+}
+          IFS=. read -r major minor patch <<<"$name"
+          bump="${{ github.event.inputs.bump }}"
+          if git describe --tags --abbrev=0 >/dev/null 2>&1; then
+            case "$bump" in
+              major) major=$((major+1)); minor=0; patch=0 ;;
+              minor) minor=$((minor+1)); patch=0 ;;
+              *) patch=$((patch+1)) ;;
+            esac
+            next_name="${major}.${minor}.${patch}"
+            next_code=$((code+1))
+          else
+            next_name="$name"
+            next_code="$code"
+          fi
+          echo "version=${next_name}+${next_code}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${next_name}" >> "$GITHUB_OUTPUT"
+          echo "apk=pocket-ledger-${next_name}+${next_code}.apk" >> "$GITHUB_OUTPUT"
+          echo "Next version: ${next_name}+${next_code} (tag v${next_name})"
+
+      - name: Bump pubspec version
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i "s/^version: .*/version: ${{ steps.version.outputs.version }}/" pubspec.yaml
+          grep '^version:' pubspec.yaml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Setup project
+        run: bash tool/setup.sh
+
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Prepare APK asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp build/app/outputs/flutter-apk/app-release.apk "${{ steps.version.outputs.apk }}"
+          ls -lh "${{ steps.version.outputs.apk }}"
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          if git diff --cached --quiet; then
+            echo "Version already set"
+          else
+            git commit -m "chore: release ${{ steps.version.outputs.version }}"
+            git push
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Pocket Ledger ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          body: |
+            ## Pocket Ledger ${{ steps.version.outputs.version }}
+
+            Download `${{ steps.version.outputs.apk }}` and install it.
+
+            In the app: **⋮ → Check for updates** to fetch future releases automatically.
+          files: ${{ steps.version.outputs.apk }}
+          fail_on_unmatched_files: true
