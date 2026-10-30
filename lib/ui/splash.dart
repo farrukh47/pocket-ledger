@@ -1,15 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../data/app_update.dart';
 
 /// Branded loading screen shown while the ledger database opens.
-class SplashScreen extends StatelessWidget {
+class SplashScreen extends StatefulWidget {
   final bool failed;
   final VoidCallback? onRetry;
 
   const SplashScreen({super.key, this.failed = false, this.onRetry});
 
+  @override
+  State<SplashScreen> createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> {
   static const _teal = Color(0xFF0F766E);
   static const _deep = Color(0xFF0B2530);
+
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final label = await AppUpdate.currentVersionLabel();
+      if (mounted) setState(() => _version = label);
+    } catch (_) {
+      // Version is optional on the splash screen.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -34,18 +57,13 @@ class SplashScreen extends StatelessWidget {
             child: Column(
               children: [
                 const Spacer(flex: 3),
-                Container(
-                  width: 88,
-                  height: 88,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.14),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-                  ),
-                  child: const Icon(
-                    Icons.menu_book_rounded,
-                    size: 44,
-                    color: Colors.white,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: Image.asset(
+                    'assets/icon.png',
+                    width: 96,
+                    height: 96,
+                    fit: BoxFit.cover,
                   ),
                 ),
                 const SizedBox(height: 22),
@@ -60,14 +78,27 @@ class SplashScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  failed ? 'Could not open your ledger' : 'Opening your account…',
+                  widget.failed
+                      ? 'Could not open your ledger'
+                      : 'Opening your account…',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.78),
                     fontSize: 14,
                   ),
                 ),
+                if (_version.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'v$_version',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
                 const Spacer(flex: 2),
-                if (failed)
+                if (widget.failed)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(28, 0, 28, 36),
                     child: Column(
@@ -82,7 +113,7 @@ class SplashScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 16),
                         FilledButton(
-                          onPressed: onRetry,
+                          onPressed: widget.onRetry,
                           style: FilledButton.styleFrom(
                             backgroundColor: Colors.white,
                             foregroundColor: _teal,

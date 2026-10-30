@@ -37,12 +37,23 @@ class _HomeState extends State<Home> {
   int _tab = 0;
   String _filter = 'all';
   bool _working = false;
+  String _version = '';
   late Future<_ViewData> _data;
 
   @override
   void initState() {
     super.initState();
     _data = _load();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final label = await AppUpdate.currentVersionLabel();
+      if (mounted) setState(() => _version = label);
+    } catch (_) {
+      // Keep the UI usable if version lookup fails.
+    }
   }
 
   Future<_ViewData> _load() async {
@@ -317,18 +328,41 @@ class _HomeState extends State<Home> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Pocket Ledger'),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Pocket Ledger'),
+          if (_version.isNotEmpty)
+            Text(
+              'v$_version',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: _muted,
+                letterSpacing: 0,
+              ),
+            ),
+        ],
+      ),
       actions: [
         PopupMenuButton<String>(
           enabled: !_working,
           tooltip: 'More',
           icon: const Icon(Icons.more_vert_rounded),
           onSelected: _menu,
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'update', child: Text('Check for updates')),
-            PopupMenuItem(value: 'csv', child: Text('Export statement (CSV)')),
-            PopupMenuItem(value: 'backup', child: Text('Save full backup')),
-            PopupMenuItem(value: 'restore', child: Text('Restore backup')),
+          itemBuilder: (_) => [
+            if (_version.isNotEmpty)
+              PopupMenuItem<String>(
+                enabled: false,
+                child: Text(
+                  'Version $_version',
+                  style: const TextStyle(color: _muted, fontSize: 13),
+                ),
+              ),
+            const PopupMenuItem(value: 'update', child: Text('Check for updates')),
+            const PopupMenuItem(value: 'csv', child: Text('Export statement (CSV)')),
+            const PopupMenuItem(value: 'backup', child: Text('Save full backup')),
+            const PopupMenuItem(value: 'restore', child: Text('Restore backup')),
           ],
         ),
       ],
