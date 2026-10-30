@@ -60,7 +60,14 @@ class AppUpdate {
     }).timeout(const Duration(seconds: 20));
 
     if (response.statusCode == 404) {
-      throw const FormatException('No releases published yet.');
+      throw const FormatException(
+        'No public releases found. If the GitHub repo is private, make it public so updates can be checked.',
+      );
+    }
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      throw const FormatException(
+        'GitHub blocked the update check. The release feed must be publicly readable.',
+      );
     }
     if (response.statusCode != 200) {
       throw FormatException('Update check failed (${response.statusCode}).');
