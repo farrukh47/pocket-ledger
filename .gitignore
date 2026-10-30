@@ -3,6 +3,7 @@
 .pub-cache/
 .pub/
 build/
+dist/
 android/.kotlin/
 .flutter-plugins*
 .flutter-plugins-dependencies
