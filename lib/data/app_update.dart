@@ -132,13 +132,37 @@ class AppUpdate {
     );
   }
 
+  /// Local APK path for [update], if a complete copy is already on disk.
+  static Future<File?> cachedApk(UpdateInfo update) async {
+    final file = await _apkFile(update);
+    if (!await file.exists()) return null;
+    final length = await file.length();
+    if (!_isCompleteApk(length, update.sizeBytes)) {
+      await file.delete();
+      return null;
+    }
+    return file;
+  }
+
+  /// Downloads the APK, or reuses a complete cached copy for this version.
   static Future<File> download(
     UpdateInfo update, {
     void Function(int received, int total)? onProgress,
   }) async {
-    final dir = await getTemporaryDirectory();
-    final file = File(p.join(dir.path, 'pocket-ledger-update.apk'));
+    final cached = await cachedApk(update);
+    if (cached != null) {
+      final length = await cached.length();
+      onProgress?.call(length, length);
+      return cached;
+    }
+
+    final file = await _apkFile(update);
+    await file.parent.create(recursive: true);
     if (await file.exists()) await file.delete();
+    await _deleteOtherCachedApks(keepLabel: update.label);
+
+    final partial = File('${file.path}.part');
+    if (await partial.exists()) await partial.delete();
 
     final client = HttpClient();
     try {
@@ -152,19 +176,48 @@ class AppUpdate {
           ? response.contentLength
           : update.sizeBytes;
       var received = 0;
-      final sink = file.openWrite();
+      final sink = partial.openWrite();
       await for (final chunk in response) {
         received += chunk.length;
         sink.add(chunk);
         onProgress?.call(received, total > 0 ? total : received);
       }
       await sink.close();
-      if (await file.length() < 1024) {
+      final length = await partial.length();
+      if (!_isCompleteApk(length, update.sizeBytes > 0 ? update.sizeBytes : total)) {
+        await partial.delete();
         throw const FormatException('Downloaded update looks incomplete.');
       }
+      await partial.rename(file.path);
       return file;
     } finally {
       client.close(force: true);
+    }
+  }
+
+  static Future<File> _apkFile(UpdateInfo update) async {
+    final dir = await getApplicationSupportDirectory();
+    return File(p.join(dir.path, 'updates', 'pocket-ledger-${update.label}.apk'));
+  }
+
+  static bool _isCompleteApk(int length, int expectedBytes) {
+    if (length < 1024 * 1024) return false;
+    if (expectedBytes > 0) return length == expectedBytes;
+    return true;
+  }
+
+  static Future<void> _deleteOtherCachedApks({required String keepLabel}) async {
+    final dir = await getApplicationSupportDirectory();
+    final updates = Directory(p.join(dir.path, 'updates'));
+    if (!await updates.exists()) return;
+    await for (final entity in updates.list()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (!name.startsWith('pocket-ledger-') || !name.endsWith('.apk')) continue;
+      if (name == 'pocket-ledger-$keepLabel.apk') continue;
+      try {
+        await entity.delete();
+      } catch (_) {}
     }
   }
 

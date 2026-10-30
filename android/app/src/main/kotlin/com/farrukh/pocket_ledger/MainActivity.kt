@@ -95,21 +95,21 @@ class MainActivity : FlutterActivity() {
                             result.error("invalid", "Missing update path.", null)
                             return@setMethodCallHandler
                         }
-                        val file = File(path)
-                        // Start installer on the UI thread so MIUI shows the update screen.
+                        val source = File(path)
                         runOnUiThread {
                             try {
-                                if (!file.exists() || file.length() < 1024L) {
+                                if (!source.exists() || source.length() < 1024L) {
                                     result.error("invalid", "Update file is missing or incomplete.", null)
                                     return@runOnUiThread
                                 }
-                                // Prefer the classic package installer UI (reliable on MIUI).
-                                // Same package name + signing key => Android updates this app in place.
-                                openPackageInstallerUi(file)
+                                ensureInstallPermission()
+                                val staged = stageApk(source)
+                                openPackageInstallerUi(staged)
                                 result.success(true)
                             } catch (primary: Exception) {
                                 try {
-                                    installWithSession(file)
+                                    val staged = stageApk(source)
+                                    installWithSession(staged)
                                     result.success(true)
                                 } catch (secondary: Exception) {
                                     result.error(
@@ -128,25 +128,39 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    private fun ensureInstallPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        if (packageManager.canRequestPackageInstalls()) return
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:$packageName"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        error("Allow “Install unknown apps” for Pocket Ledger, then tap Check for updates again.")
+    }
+
+    /** Copy into app files so FileProvider + MIUI can always read it. */
+    private fun stageApk(source: File): File {
+        val dir = File(filesDir, "updates").apply { mkdirs() }
+        val staged = File(dir, "pending-update.apk")
+        if (staged.absolutePath != source.absolutePath) {
+            source.copyTo(staged, overwrite = true)
+        }
+        if (!staged.exists() || staged.length() < 1024L) {
+            error("Could not prepare the update file.")
+        }
+        return staged
+    }
+
     /** Opens the system installer so the user can confirm updating this app. */
     private fun openPackageInstallerUi(file: File) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-            !packageManager.canRequestPackageInstalls()
-        ) {
-            startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:$packageName"),
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-            error("Allow “Install unknown apps” for Pocket Ledger, then tap Check for updates again.")
-        }
-
         val uri: Uri = FileProvider.getUriForFile(
             this,
             "${applicationContext.packageName}.fileprovider",
             file,
         )
+
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -163,10 +177,37 @@ class MainActivity : FlutterActivity() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
-        if (resolvers.isEmpty()) {
-            error("No package installer is available on this device.")
+
+        val preferred = listOf(
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.miui.packageinstaller",
+            "com.miui.global.packageinstaller",
+        )
+        for (pkg in preferred) {
+            if (resolvers.none { it.activityInfo.packageName == pkg }) continue
+            try {
+                grantUriPermission(pkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                startActivity(Intent(intent).setPackage(pkg))
+                return
+            } catch (_: Exception) {
+                // Try the next known installer.
+            }
         }
-        startActivity(intent)
+
+        if (resolvers.isEmpty()) {
+            @Suppress("DEPRECATION")
+            val install = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+            }
+            startActivity(install)
+            return
+        }
+
+        startActivity(Intent.createChooser(intent, "Install Pocket Ledger update"))
     }
 
     /** Fallback: PackageInstaller session (some devices prefer this path). */

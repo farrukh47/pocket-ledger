@@ -181,71 +181,67 @@ class _HomeState extends State<Home> {
       );
       if (go != true || !mounted) return;
 
-      final progress = ValueNotifier<(int received, int total)>((0, update.sizeBytes));
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => PopScope(
-          canPop: false,
-          child: ValueListenableBuilder<(int, int)>(
-            valueListenable: progress,
-            builder: (context, value, _) {
-              final received = value.$1;
-              final total = value.$2 > 0 ? value.$2 : update.sizeBytes;
-              final ratio = total > 0 ? (received / total).clamp(0.0, 1.0) : null;
-              final percent = total > 0
-                  ? ((received / total) * 100).clamp(0, 100).toStringAsFixed(0)
-                  : '…';
-              return AlertDialog(
-                title: const Text('Updating Pocket Ledger'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    LinearProgressIndicator(value: ratio),
-                    const SizedBox(height: 14),
-                    Text(
-                      total > 0
-                          ? '${formatBytes(received)} / ${formatBytes(total)}  ($percent%)'
-                          : '${formatBytes(received)} downloaded',
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Keep the app open. Android will ask you to confirm the update.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: _muted),
-                    ),
-                  ],
-                ),
-              );
-            },
+      final cached = await AppUpdate.cachedApk(update);
+      File apk;
+      if (cached != null) {
+        apk = cached;
+        _message('Using downloaded ${update.label}…');
+      } else {
+        final progress = ValueNotifier<(int received, int total)>((0, update.sizeBytes));
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => PopScope(
+            canPop: false,
+            child: ValueListenableBuilder<(int, int)>(
+              valueListenable: progress,
+              builder: (context, value, _) {
+                final received = value.$1;
+                final total = value.$2 > 0 ? value.$2 : update.sizeBytes;
+                final ratio = total > 0 ? (received / total).clamp(0.0, 1.0) : null;
+                final percent = total > 0
+                    ? ((received / total) * 100).clamp(0, 100).toStringAsFixed(0)
+                    : '…';
+                return AlertDialog(
+                  title: const Text('Downloading update'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LinearProgressIndicator(value: ratio),
+                      const SizedBox(height: 14),
+                      Text(
+                        total > 0
+                            ? '${formatBytes(received)} / ${formatBytes(total)}  ($percent%)'
+                            : '${formatBytes(received)} downloaded',
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
-        ),
-      );
+        );
 
-      try {
-        final apk = await AppUpdate.download(
-          update,
-          onProgress: (received, total) {
-            progress.value = (received, total);
-          },
-        );
-        progress.value = (
-          await apk.length(),
-          update.sizeBytes > 0 ? update.sizeBytes : await apk.length(),
-        );
-        if (!mounted) return;
-        _message('Applying update ${update.label}…');
-        await AppUpdate.installUpdate(apk);
-        if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        _message('Tap Update on the system screen to finish installing over this app.');
-      } catch (_) {
-        if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        rethrow;
-      } finally {
-        progress.dispose();
+        try {
+          apk = await AppUpdate.download(
+            update,
+            onProgress: (received, total) {
+              progress.value = (received, total);
+            },
+          );
+        } finally {
+          progress.dispose();
+          if (mounted) Navigator.of(context, rootNavigator: true).pop();
+        }
       }
+
+      if (!mounted) return;
+      // Close any overlays before opening the system installer (MIUI blocks it otherwise).
+      _message('Opening installer for ${update.label}…');
+      await AppUpdate.installUpdate(apk);
+      _message('Tap Update on the system screen to finish installing over this app.');
     } on FormatException catch (e) {
       _message(e.message);
     } on PlatformException catch (e) {
